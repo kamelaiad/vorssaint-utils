@@ -41,6 +41,8 @@ final class NotchPomodoroLink: ObservableObject {
     private static let base = URL(string: "http://127.0.0.1:4760/")!
     @Published private(set) var live: NotchPomodoroLive?
     private var timer: Timer?
+    /// When `live` was read, so a pause shown before the app answers keeps the right second.
+    private var readAt = Date()
 
     private init() {}
 
@@ -66,14 +68,34 @@ final class NotchPomodoroLink: ObservableObject {
 
     /// Commands the app understands: toggle, skip, reset, start, bin, music, next.
     func send(_ action: String) {
+        showAtOnce(action)
         var request = URLRequest(url: Self.base.appendingPathComponent("api/command"),
                                  cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": action])
         URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self?.poll() }
+            // The app acts within a few milliseconds; read back its new state twice.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self?.poll() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.poll() }
         }.resume()
+    }
+
+    /// The tap shows before the app answers; the next read confirms or corrects it.
+    private func showAtOnce(_ action: String) {
+        guard var next = live else { return }
+        switch action {
+        case "toggle" where next.mode != "idle":
+            if next.running { next.elapsedSeconds += Date().timeIntervalSince(readAt) }
+            next.running.toggle()
+            readAt = Date()
+        case "music":
+            next.musicPlaying.toggle()
+        default:
+            return
+        }
+        live = next
+        if isActive { NotchTimerService.shared.mirror(next) }
     }
 
     private func poll() {
@@ -87,6 +109,7 @@ final class NotchPomodoroLink: ObservableObject {
     }
 
     private func apply(_ next: NotchPomodoroLive?) {
+        readAt = Date()
         let usable = next.flatMap { $0.stale ? nil : $0 }
         let wasActive = isActive
         if usable != live { live = usable }
