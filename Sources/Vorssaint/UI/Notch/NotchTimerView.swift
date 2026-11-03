@@ -6,6 +6,7 @@ import SwiftUI
 struct NotchTimerView: View {
     let size: CGSize
     @ObservedObject private var service = NotchTimerService.shared
+    @ObservedObject private var link = NotchPomodoroLink.shared
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(DefaultsKey.notchTimerMode) private var mode: NotchTimerMode = .timer
     @AppStorage(DefaultsKey.notchPomodoroFocusMinutes) private var focusMinutes = 25
@@ -193,6 +194,7 @@ struct NotchTimerView: View {
                 roundButton(symbol: "play.fill", title: text.start + " " + text.phase(service.session.nextPhase),
                             action: service.startNext)
             }
+            if service.linked, let live = link.live { linkedNote(live) }
             Spacer(minLength: 0)
             if service.session.isRunning {
                 TimelineView(.periodic(from: Date(timeIntervalSinceNow: NotchTimerSupport.tickScheduleOffset(
@@ -204,8 +206,40 @@ struct NotchTimerView: View {
         .frame(height: NotchLayout.timer(mode: service.session.mode, hasSession: true, height: size.height))
     }
 
+    /// The Pomodoro app's sticky note, today's numbers and its buttons.
+    private func linkedNote(_ live: NotchPomodoroLive) -> some View {
+        let stats = "\(live.stats.focusMinutes) min · \(live.stats.sessions) sessions · \(live.stats.binned) binned"
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(live.note.isEmpty ? "No sticky note" : live.note)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Text(live.lane.isEmpty ? stats : "\(live.lane) · \(stats)")
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            HStack(spacing: 2) {
+                NotchIconButton(symbol: "checkmark", title: "Bin it") { link.send("bin") }
+                NotchIconButton(symbol: live.musicPlaying ? "speaker.wave.2.fill" : "speaker.slash",
+                                title: live.musicTitle.isEmpty ? "Music" : live.musicTitle,
+                                selected: live.musicPlaying) { link.send("music") }
+                NotchIconButton(symbol: "forward.fill", title: "Next track") { link.send("next") }
+                NotchIconButton(symbol: "forward.end.fill", title: live.mode == "focus" ? "Take a break" : "Skip break") {
+                    link.send("skip")
+                }
+            }
+        }
+        .frame(maxWidth: 240, alignment: .leading)
+    }
+
     private var phaseTitle: String {
-        service.session.cycleFinished ? text.pomodoroFinished
+        if service.linked, let live = link.live {
+            if service.session.mode == .stopwatch { return "In flow" }
+            if live.mode == "break" { return live.longBreak ? "Long break" : "Break · away from the screen" }
+        }
+        return service.session.cycleFinished ? text.pomodoroFinished
             : service.session.completed ? text.finished : text.phase(service.session.phase)
     }
 

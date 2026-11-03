@@ -15,6 +15,8 @@ final class NotchTimerService: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var suspended = true
     private let alert = NotchTimerAlert()
+    /// The session mirrors the Pomodoro app on this Mac; buttons go to it.
+    private(set) var linked = false
     private init() {}
 
     var now: TimeInterval {
@@ -25,6 +27,8 @@ final class NotchTimerService: ObservableObject {
     func syncWithPreferences() {
         guard NotchTimerSupport.isEnabled() else { stop(); return }
         suspended = false
+        NotchPomodoroLink.shared.start()
+        if linked { return }
         finishIfDue()
         if session.completed { alert.start(enabled: NotchTimerSupport.isSoundEnabled()) }
         scheduleCompletion()
@@ -33,6 +37,11 @@ final class NotchTimerService: ObservableObject {
     func start(mode: NotchTimerMode, minutes: Int) {
         guard !suspended, NotchTimerSupport.isEnabled() else { return }
         guard !session.hasSession else { return }
+        // A Pomodoro started here runs in the app, with its note and music.
+        if mode == .pomodoro, NotchPomodoroLink.shared.isConnected {
+            NotchPomodoroLink.shared.send("start")
+            return
+        }
         alert.stop()
         session.start(mode: mode, minutes: minutes, now: now, configuration: .load())
         scheduleCompletion()
@@ -41,6 +50,7 @@ final class NotchTimerService: ObservableObject {
 
     func pauseOrResume() {
         guard !suspended, NotchTimerSupport.isEnabled() else { return }
+        if linked { NotchPomodoroLink.shared.send("toggle"); return }
         finishIfDue()
         if session.isRunning { session.pause(at: now) }
         else if session.isPaused { session.resume(at: now) }
@@ -49,6 +59,7 @@ final class NotchTimerService: ObservableObject {
 
     func startNext() {
         guard !suspended, NotchTimerSupport.isEnabled() else { return }
+        if linked { NotchPomodoroLink.shared.send("skip"); return }
         guard session.canStartNext else { return }
         alert.stop()
         session.startNext(at: now)
@@ -57,6 +68,7 @@ final class NotchTimerService: ObservableObject {
     }
 
     func cancel() {
+        if linked { NotchPomodoroLink.shared.send("reset"); return }
         alert.stop()
         completionTask?.cancel(); completionTask = nil
         countdownTask?.cancel(); countdownTask = nil
@@ -72,7 +84,32 @@ final class NotchTimerService: ObservableObject {
         NotchService.shared.endMascotCountdown(retreating: false)
     }
 
-    func stop() { suspend(); cancel() }
+    func stop() {
+        NotchPomodoroLink.shared.stop()
+        suspend()
+        cancel()
+    }
+
+    /// Follows the linked app; nil hands the timer back to the notch.
+    func mirror(_ live: NotchPomodoroLive?) {
+        guard let live else {
+            guard linked else { return }
+            linked = false
+            NotchService.shared.endMascotCountdown(retreating: true)
+            session.cancel()
+            return
+        }
+        if !linked {
+            linked = true
+            alert.stop()
+            completionTask?.cancel(); completionTask = nil
+            countdownTask?.cancel(); countdownTask = nil
+            if session.hasSession { session.cancel() }
+        }
+        var next = session
+        next.mirror(live, now: now)
+        if next != session { session = next }
+    }
 
     private func finishIfDue() {
         guard session.finishIfDue(at: now) else { return }

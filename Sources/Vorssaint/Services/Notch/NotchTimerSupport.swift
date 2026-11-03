@@ -183,6 +183,35 @@ struct NotchTimerSession: Equatable {
     }
 
     mutating func cancel() { self = Self() }
+
+    /// Takes the phase and reading of the linked Pomodoro app. Focus past its
+    /// planned length is the soft end: it counts up, like a stopwatch. The
+    /// anchor only moves when it drifts, so a poll every second does not
+    /// republish an unchanged session.
+    mutating func mirror(_ live: NotchPomodoroLive, now: TimeInterval) {
+        guard now.isFinite else { return }
+        let every = max(1, live.longEvery)
+        configuration = NotchPomodoroConfiguration(focusMinutes: live.focusMinutes,
+                                                   shortBreakMinutes: live.shortMinutes,
+                                                   longBreakMinutes: live.longMinutes,
+                                                   longBreakInterval: every, totalSessions: every)
+        completedFocuses = max(0, live.cycle % every)
+        completed = false
+        let remaining = live.phaseSeconds - live.elapsedSeconds
+        let overtime = live.mode == "focus" && remaining < 0
+        mode = overtime ? .stopwatch : .pomodoro
+        phase = overtime ? .stopwatch : live.mode == "focus" ? .focus : live.longBreak ? .longBreak : .shortBreak
+        duration = overtime ? 0 : live.phaseSeconds
+        let reading = overtime ? -remaining : max(0, remaining)
+        if live.running {
+            let target = overtime ? now - reading : now + reading
+            if anchor == nil || abs((anchor ?? target) - target) > 1.5 { anchor = target }
+            pausedReading = nil
+        } else {
+            anchor = nil
+            if abs((pausedReading ?? -10) - reading) > 0.5 { pausedReading = reading }
+        }
+    }
 }
 
 enum NotchTimerSupport {
