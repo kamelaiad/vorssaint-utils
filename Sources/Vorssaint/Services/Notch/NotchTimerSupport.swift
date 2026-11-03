@@ -340,6 +340,8 @@ enum NotchTimerSupport {
     static func compactText(for session: NotchTimerSession, at now: TimeInterval, locale: Locale) -> String {
         let reading = session.reading(at: now)
         if session.countsUp { return compactStopwatchText(reading) }
+        // The linked Pomodoro keeps its seconds in the closed island.
+        if NotchTimerService.shared.linked, reading < 3600 { return clockText(reading) }
         return reading >= 3600 ? compactHoursText(reading) : compactText(reading, locale: locale)
     }
 
